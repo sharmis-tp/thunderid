@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"testing"
@@ -513,7 +514,7 @@ func (ts *MCPTestSuite) runApplicationDeletionFlow(appID string) {
 	ts.Require().Containsf(string(body), `"COMPLETE"`, "deletion flow must complete: %s", string(body))
 }
 
-// mcpToolResult is the part of a tools/call response the HTTP connection tool test reads.
+// mcpToolResult is the part of a tools/call response the tool tests read.
 type mcpToolResult struct {
 	Result struct {
 		IsError           bool           `json:"isError"`
@@ -521,21 +522,20 @@ type mcpToolResult struct {
 	} `json:"result"`
 }
 
-// callMCPTool sends a stateless 2026-07-28 tools/call request and returns the decoded result with
-// the raw response body, which an SSE response carries on its data line.
-func (ts *MCPTestSuite) callMCPTool(token, name string, args map[string]any) (mcpToolResult, string) {
-	payload, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-		"params": map[string]any{
-			"name": name, "arguments": args,
-			"_meta": map[string]any{
-				"io.modelcontextprotocol/protocolVersion":    mcpProtocolVersion20260728,
-				"io.modelcontextprotocol/clientCapabilities": map[string]any{},
-				"io.modelcontextprotocol/clientInfo": map[string]any{
-					"name": "thunderid-integration-test", "version": "1.0.0"},
-			},
+// postStatelessMCP sends a stateless 2026-07-28 request and returns the JSON-RPC message with the
+// raw response body. An SSE response carries the message on its data line. A non-empty mcpName is
+// mirrored into the Mcp-Name header, as tools/call requires.
+func (ts *MCPTestSuite) postStatelessMCP(token, method, mcpName string, params map[string]any) (string, string) {
+	withMeta := map[string]any{
+		"_meta": map[string]any{
+			"io.modelcontextprotocol/protocolVersion":    mcpProtocolVersion20260728,
+			"io.modelcontextprotocol/clientCapabilities": map[string]any{},
+			"io.modelcontextprotocol/clientInfo": map[string]any{
+				"name": "thunderid-integration-test", "version": "1.0.0"},
 		},
-	})
+	}
+	maps.Copy(withMeta, params)
+	payload, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": withMeta})
 	ts.Require().NoError(err)
 
 	req, err := http.NewRequest(http.MethodPost, mcpEndpoint, bytes.NewReader(payload))
@@ -543,15 +543,18 @@ func (ts *MCPTestSuite) callMCPTool(token, name string, args map[string]any) (mc
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	req.Header.Set("MCP-Protocol-Version", mcpProtocolVersion20260728)
-	req.Header.Set("Mcp-Method", "tools/call")
-	req.Header.Set("Mcp-Name", name)
+	req.Header.Set("Mcp-Method", method)
+	if mcpName != "" {
+		req.Header.Set("Mcp-Name", mcpName)
+	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := ts.client.Do(req)
 	ts.Require().NoError(err)
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	ts.Require().Equalf(http.StatusOK, resp.StatusCode, "%s failed: %s", name, string(body))
+	ts.Require().Equalf(http.StatusOK, resp.StatusCode, "%s failed: %s",
+		strings.TrimSpace(method+" "+mcpName), string(body))
 
 	message := string(body)
 	for _, line := range strings.Split(message, "\n") {
@@ -559,9 +562,51 @@ func (ts *MCPTestSuite) callMCPTool(token, name string, args map[string]any) (mc
 			message = data
 		}
 	}
+	return message, string(body)
+}
+
+// callMCPTool sends a stateless 2026-07-28 tools/call request and returns the decoded result with
+// the raw response body.
+func (ts *MCPTestSuite) callMCPTool(token, name string, args map[string]any) (mcpToolResult, string) {
+	message, body := ts.postStatelessMCP(token, "tools/call", name, map[string]any{"name": name, "arguments": args})
 	var result mcpToolResult
-	ts.Require().NoErrorf(json.Unmarshal([]byte(message), &result), "%s returned: %s", name, string(body))
-	return result, string(body)
+	ts.Require().NoErrorf(json.Unmarshal([]byte(message), &result), "%s returned: %s", name, body)
+	return result, body
+}
+
+// tools/list advertises every tool without the product name in its name, and no title, description,
+// or schema refers to a tool by its old prefixed name. Clients that aggregate several servers
+// namespace tool names themselves, so the server does not prefix them (#6105).
+func (ts *MCPTestSuite) TestListTools_NamesDoNotCarryProductName() {
+	message, body := ts.postStatelessMCP(ts.mcpScopedAdminToken(), "tools/list", "", map[string]any{})
+	var listed struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	ts.Require().NoErrorf(json.Unmarshal([]byte(message), &listed), "tools/list returned: %s", body)
+	ts.Require().NotEmptyf(listed.Result.Tools, "tools/list returned no tools: %s", body)
+
+	names := make([]string, 0, len(listed.Result.Tools))
+	for _, tool := range listed.Result.Tools {
+		ts.NotContainsf(strings.ToLower(tool.Name), "thunderid", "tool %q carries the product name", tool.Name)
+		names = append(names, tool.Name)
+	}
+	ts.Contains(names, "list_applications")
+	ts.NotContains(message, "thunderid_")
+}
+
+// The React SDK guide tells the agent which tools to call, so it names them without the prefix.
+func (ts *MCPTestSuite) TestIntegrateReactSDK_GuideNamesToolsWithoutPrefix() {
+	result, raw := ts.callMCPTool(ts.mcpScopedAdminToken(), "integrate_react_sdk", map[string]any{})
+	ts.Require().Falsef(result.Result.IsError, "integrate_react_sdk failed: %s", raw)
+
+	instructions, _ := result.Result.StructuredContent["instructions"].(string)
+	ts.Require().NotEmptyf(instructions, "integrate_react_sdk returned no instructions: %s", raw)
+	ts.NotContains(instructions, "thunderid_")
+	ts.Contains(instructions, "`update_application`")
 }
 
 // The HTTP connection tools run the /connections/http path end to end: the password is never
@@ -571,8 +616,8 @@ func (ts *MCPTestSuite) TestHTTPConnectionTools_MaskAndRetainPassword() {
 	const password = "mcp-http-connection-secret"
 	token := ts.mcpScopedAdminToken()
 
-	created, raw := ts.callMCPTool(token, "thunderid_create_http_connection", map[string]any{
-		"name": "MCP Tools HTTP Connection", "url": "https://risk.example.com/evaluate",
+	created, raw := ts.callMCPTool(token, "create_http_connection", map[string]any{
+		"ouId": ts.ouID, "name": "MCP Tools HTTP Connection", "url": "https://risk.example.com/evaluate",
 		"authentication": map[string]any{"type": "basic",
 			"properties": map[string]any{"username": "svc-user", "password": password}},
 	})
@@ -582,24 +627,24 @@ func (ts *MCPTestSuite) TestHTTPConnectionTools_MaskAndRetainPassword() {
 	ts.Require().NotEmpty(id)
 	ts.T().Cleanup(func() { ts.deleteHTTPConnection(id) })
 
-	got, raw := ts.callMCPTool(token, "thunderid_get_http_connection_by_id", map[string]any{"id": id})
+	got, raw := ts.callMCPTool(token, "get_http_connection_by_id", map[string]any{"id": id})
 	ts.Require().Falsef(got.Result.IsError, "get failed: %s", raw)
 	ts.NotContains(raw, password)
 	ts.Contains(raw, `"password":"******"`)
 
-	listed, raw := ts.callMCPTool(token, "thunderid_list_http_connections", map[string]any{})
+	listed, raw := ts.callMCPTool(token, "list_http_connections", map[string]any{})
 	ts.Require().Falsef(listed.Result.IsError, "list failed: %s", raw)
 	ts.Contains(raw, id)
 	ts.NotContains(raw, password)
 
-	sameOrigin, raw := ts.callMCPTool(token, "thunderid_update_http_connection", map[string]any{
+	sameOrigin, raw := ts.callMCPTool(token, "update_http_connection", map[string]any{
 		"id": id, "name": "MCP Tools HTTP Connection", "url": "https://risk.example.com/v2/evaluate",
 		"authentication": map[string]any{"type": "basic", "properties": map[string]any{"username": "svc-user"}},
 	})
 	ts.Falsef(sameOrigin.Result.IsError, "an update keeping the origin must keep the stored password: %s", raw)
 	ts.NotContains(raw, password)
 
-	otherOrigin, raw := ts.callMCPTool(token, "thunderid_update_http_connection", map[string]any{
+	otherOrigin, raw := ts.callMCPTool(token, "update_http_connection", map[string]any{
 		"id": id, "name": "MCP Tools HTTP Connection", "url": "https://elsewhere.example.net/evaluate",
 		"authentication": map[string]any{"type": "basic", "properties": map[string]any{"username": "svc-user"}},
 	})
@@ -617,8 +662,8 @@ func (ts *MCPTestSuite) TestHTTPConnectionTools_MaskedPasswordReadBackIsRefused(
 	const name = "MCP Tools HTTP Connection Read Back"
 	token := ts.mcpScopedAdminToken()
 
-	created, raw := ts.callMCPTool(token, "thunderid_create_http_connection", map[string]any{
-		"name": name, "url": "https://risk.example.com/evaluate",
+	created, raw := ts.callMCPTool(token, "create_http_connection", map[string]any{
+		"ouId": ts.ouID, "name": name, "url": "https://risk.example.com/evaluate",
 		"authentication": map[string]any{"type": "basic",
 			"properties": map[string]any{"username": "svc-user", "password": password}},
 	})
@@ -627,25 +672,25 @@ func (ts *MCPTestSuite) TestHTTPConnectionTools_MaskedPasswordReadBackIsRefused(
 	ts.Require().NotEmpty(id)
 	ts.T().Cleanup(func() { ts.deleteHTTPConnection(id) })
 
-	got, raw := ts.callMCPTool(token, "thunderid_get_http_connection_by_id", map[string]any{"id": id})
+	got, raw := ts.callMCPTool(token, "get_http_connection_by_id", map[string]any{"id": id})
 	ts.Require().Falsef(got.Result.IsError, "get failed: %s", raw)
 	readBack := got.Result.StructuredContent
 	// type is part of the output only; the update workflow tells the agent to leave it out.
 	delete(readBack, "type")
 	readBack["description"] = "changed by the read-back update"
 
-	refused, raw := ts.callMCPTool(token, "thunderid_update_http_connection", readBack)
+	refused, raw := ts.callMCPTool(token, "update_http_connection", readBack)
 	ts.Truef(refused.Result.IsError, "a password sent as the mask must be refused: %s", raw)
 	ts.Contains(raw, "failed to update HTTP connection")
 	ts.Contains(raw, "a password or token cannot be ******")
 	ts.NotContains(raw, password)
 
-	got, raw = ts.callMCPTool(token, "thunderid_get_http_connection_by_id", map[string]any{"id": id})
+	got, raw = ts.callMCPTool(token, "get_http_connection_by_id", map[string]any{"id": id})
 	ts.Require().Falsef(got.Result.IsError, "get failed: %s", raw)
 	ts.Nil(got.Result.StructuredContent["description"], "the refused update must not be applied")
 	ts.Contains(raw, `"password":"******"`)
 
-	kept, raw := ts.callMCPTool(token, "thunderid_update_http_connection", map[string]any{
+	kept, raw := ts.callMCPTool(token, "update_http_connection", map[string]any{
 		"id": id, "name": name, "url": "https://risk.example.com/v2/evaluate",
 		"authentication": map[string]any{"type": "basic", "properties": map[string]any{"username": "svc-user"}},
 	})
@@ -691,11 +736,11 @@ func (ts *MCPTestSuite) TestAgentTools_Lifecycle() {
 	})
 	ts.Require().NoError(err, "failed to point the default agent type at the suite OU")
 
-	types, raw := ts.callMCPTool(token, "thunderid_list_agent_types", map[string]any{})
+	types, raw := ts.callMCPTool(token, "list_agent_types", map[string]any{})
 	ts.Require().Falsef(types.Result.IsError, "list agent types failed: %s", raw)
 	ts.Contains(raw, `"handle":"default"`)
 
-	onboarded, raw := ts.callMCPTool(token, "thunderid_onboard_agent", map[string]any{
+	onboarded, raw := ts.callMCPTool(token, "onboard_agent", map[string]any{
 		"type": "default", "ouId": ts.ouID, "description": "Triages support tickets",
 		"attributes": map[string]any{"name": "mcp-tools-agent"},
 	})
@@ -714,17 +759,17 @@ func (ts *MCPTestSuite) TestAgentTools_Lifecycle() {
 	ts.Require().NotEmpty(firstSecret)
 	ts.Equal(http.StatusOK, ts.clientCredentialsStatus(clientID, firstSecret))
 
-	got, raw := ts.callMCPTool(token, "thunderid_get_agent", map[string]any{"id": agentID})
+	got, raw := ts.callMCPTool(token, "get_agent", map[string]any{"id": agentID})
 	ts.Require().Falsef(got.Result.IsError, "get failed: %s", raw)
 	ts.Equal("mcp-tools-agent", got.Result.StructuredContent["name"])
 	ts.NotContains(raw, firstSecret)
 
-	listed, raw := ts.callMCPTool(token, "thunderid_list_agents", map[string]any{"limit": 100})
+	listed, raw := ts.callMCPTool(token, "list_agents", map[string]any{"limit": 100})
 	ts.Require().Falsef(listed.Result.IsError, "list failed: %s", raw)
 	ts.Contains(raw, agentID)
 	ts.NotContains(raw, firstSecret)
 
-	rotated, raw := ts.callMCPTool(token, "thunderid_rotate_agent_secret", map[string]any{"id": agentID})
+	rotated, raw := ts.callMCPTool(token, "rotate_agent_secret", map[string]any{"id": agentID})
 	ts.Require().Falsef(rotated.Result.IsError, "rotate failed: %s", raw)
 	secondSecret, _ := rotated.Result.StructuredContent["clientSecret"].(string)
 	ts.Require().NotEmpty(secondSecret)
@@ -733,11 +778,11 @@ func (ts *MCPTestSuite) TestAgentTools_Lifecycle() {
 	ts.Equal(http.StatusUnauthorized, ts.clientCredentialsStatus(clientID, firstSecret))
 	ts.Equal(http.StatusOK, ts.clientCredentialsStatus(clientID, secondSecret))
 
-	refused, raw := ts.callMCPTool(token, "thunderid_set_agent_mode", map[string]any{
+	refused, raw := ts.callMCPTool(token, "set_agent_mode", map[string]any{
 		"id": agentID, "mode": "delegated"})
 	ts.Truef(refused.Result.IsError, "delegated mode without redirect URIs must be refused: %s", raw)
 
-	delegated, raw := ts.callMCPTool(token, "thunderid_set_agent_mode", map[string]any{
+	delegated, raw := ts.callMCPTool(token, "set_agent_mode", map[string]any{
 		"id": agentID, "mode": "delegated", "redirectUris": []string{"https://localhost:3000/callback"}})
 	ts.Require().Falsef(delegated.Result.IsError, "set delegated mode failed: %s", raw)
 	ts.Equal("delegated", delegated.Result.StructuredContent["mode"])
@@ -746,15 +791,15 @@ func (ts *MCPTestSuite) TestAgentTools_Lifecycle() {
 	ts.Equal(http.StatusOK, ts.clientCredentialsStatus(clientID, secondSecret),
 		"a mode change must keep the stored secret")
 
-	autonomous, raw := ts.callMCPTool(token, "thunderid_set_agent_mode", map[string]any{
+	autonomous, raw := ts.callMCPTool(token, "set_agent_mode", map[string]any{
 		"id": agentID, "mode": "autonomous"})
 	ts.Require().Falsef(autonomous.Result.IsError, "set autonomous mode failed: %s", raw)
 	ts.Equal("autonomous", autonomous.Result.StructuredContent["mode"])
 	ts.NotContains(raw, "authorization_code")
 
-	offboarded, raw := ts.callMCPTool(token, "thunderid_offboard_agent", map[string]any{"id": agentID})
+	offboarded, raw := ts.callMCPTool(token, "offboard_agent", map[string]any{"id": agentID})
 	ts.Require().Falsef(offboarded.Result.IsError, "offboard failed: %s", raw)
-	gone, raw := ts.callMCPTool(token, "thunderid_get_agent", map[string]any{"id": agentID})
+	gone, raw := ts.callMCPTool(token, "get_agent", map[string]any{"id": agentID})
 	ts.Truef(gone.Result.IsError, "an offboarded agent must not be found: %s", raw)
 }
 

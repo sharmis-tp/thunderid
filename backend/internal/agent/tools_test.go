@@ -161,23 +161,23 @@ func (s *AgentToolsTestSuite) TestRegisterMCPTools() {
 		tools[registered.Name] = registered
 	}
 	s.Len(tools, 7)
-	for _, name := range []string{"thunderid_list_agents", "thunderid_get_agent"} {
+	for _, name := range []string{"list_agents", "get_agent"} {
 		s.Require().Contains(tools, name)
 		s.True(tools[name].Annotations.ReadOnlyHint, name)
 	}
-	for _, name := range []string{"thunderid_rotate_agent_secret", "thunderid_offboard_agent"} {
+	for _, name := range []string{"rotate_agent_secret", "offboard_agent"} {
 		s.Require().Contains(tools, name)
 		s.Require().NotNil(tools[name].Annotations.DestructiveHint, name)
 		s.True(*tools[name].Annotations.DestructiveHint, name)
 	}
-	s.Contains(tools, "thunderid_onboard_agent")
-	s.Contains(tools, "thunderid_set_agent_mode")
-	s.Contains(tools, "thunderid_transfer_agent_ownership")
+	s.Contains(tools, "onboard_agent")
+	s.Contains(tools, "set_agent_mode")
+	s.Contains(tools, "transfer_agent_ownership")
 
-	onboardSchema, err := json.Marshal(tools["thunderid_onboard_agent"].InputSchema)
+	onboardSchema, err := json.Marshal(tools["onboard_agent"].InputSchema)
 	s.Require().NoError(err)
 	s.Contains(string(onboardSchema), `"enum":["autonomous","delegated","none"]`)
-	modeSchema, err := json.Marshal(tools["thunderid_set_agent_mode"].InputSchema)
+	modeSchema, err := json.Marshal(tools["set_agent_mode"].InputSchema)
 	s.Require().NoError(err)
 	s.Contains(string(modeSchema), `"enum":["autonomous","delegated"]`)
 }
@@ -193,7 +193,7 @@ func (s *AgentToolsTestSuite) TestListAgents() {
 		}, (*tidcommon.ServiceError)(nil)).Once()
 
 	var out agentListMCPResponse
-	s.structured(s.call("thunderid_list_agents", map[string]any{}), &out)
+	s.structured(s.call("list_agents", map[string]any{}), &out)
 
 	s.Equal(1, out.TotalResults)
 	s.Require().Len(out.Agents, 1)
@@ -206,7 +206,7 @@ func (s *AgentToolsTestSuite) TestListAgents_PaginationAndError() {
 		Return(nil, &tidcommon.ServiceError{
 			ErrorDescription: tidcommon.I18nMessage{DefaultValue: "Limit is out of range"}}).Once()
 
-	result := s.call("thunderid_list_agents", map[string]any{"limit": 5, "offset": 10})
+	result := s.call("list_agents", map[string]any{"limit": 5, "offset": 10})
 
 	s.Equal("failed to list agents: Limit is out of range", s.errorText(result))
 }
@@ -224,7 +224,7 @@ func (s *AgentToolsTestSuite) TestGetAgent() {
 			(*tidcommon.ServiceError)(nil)).Once()
 
 	var out agentMCPOutput
-	s.structured(s.call("thunderid_get_agent", map[string]any{"id": toolsAgentID}), &out)
+	s.structured(s.call("get_agent", map[string]any{"id": toolsAgentID}), &out)
 
 	s.Equal("Helper", out.Name)
 	s.Equal("engineering", out.OUHandle)
@@ -248,14 +248,14 @@ func (s *AgentToolsTestSuite) TestGetAgent_Errors() {
 		s.mockService.On("GetAgent", mock.Anything, "missing", true).
 			Return(nil, notFound).Once()
 		s.Equal("failed to get agent: Agent not found",
-			s.errorText(s.call("thunderid_get_agent", map[string]any{"id": "missing"})))
+			s.errorText(s.call("get_agent", map[string]any{"id": "missing"})))
 	})
 	s.Run("roles", func() {
 		s.mockService.On("GetAgent", mock.Anything, toolsAgentID, true).
 			Return(storedAgent(), (*tidcommon.ServiceError)(nil)).Once()
 		s.mockService.On("GetAgentRoles", mock.Anything, toolsAgentID, agentAccessPageSize, 0).
 			Return(nil, &tidcommon.InternalServerError).Once()
-		s.Contains(s.errorText(s.call("thunderid_get_agent", map[string]any{"id": toolsAgentID})),
+		s.Contains(s.errorText(s.call("get_agent", map[string]any{"id": toolsAgentID})),
 			"failed to get agent: ")
 	})
 	s.Run("groups", func() {
@@ -265,7 +265,7 @@ func (s *AgentToolsTestSuite) TestGetAgent_Errors() {
 			Return(&model.AgentRoleListResponse{}, (*tidcommon.ServiceError)(nil)).Once()
 		s.mockService.On("GetAgentGroups", mock.Anything, toolsAgentID, agentAccessPageSize, 0).
 			Return(nil, &tidcommon.InternalServerError).Once()
-		s.Contains(s.errorText(s.call("thunderid_get_agent", map[string]any{"id": toolsAgentID})),
+		s.Contains(s.errorText(s.call("get_agent", map[string]any{"id": toolsAgentID})),
 			"failed to get agent: ")
 	})
 }
@@ -290,7 +290,7 @@ func (s *AgentToolsTestSuite) TestOnboardAgent_AutonomousByDefault() {
 	received := s.captureCreate("new-secret")
 
 	var out agentMCPOutput
-	s.structured(s.call("thunderid_onboard_agent", map[string]any{
+	s.structured(s.call("onboard_agent", map[string]any{
 		"type": "assistant", "ouHandle": "engineering", "description": "Answers support tickets",
 		"attributes": map[string]any{"name": "Helper"},
 	}), &out)
@@ -313,7 +313,7 @@ func (s *AgentToolsTestSuite) TestOnboardAgent_AutonomousByDefault() {
 func (s *AgentToolsTestSuite) TestOnboardAgent_Delegated() {
 	received := s.captureCreate("new-secret")
 
-	s.structured(s.call("thunderid_onboard_agent", map[string]any{
+	s.structured(s.call("onboard_agent", map[string]any{
 		"type": "assistant", "ouId": "ou-1", "owner": "user-2", "mode": "delegated",
 		"redirectUris": []any{"https://agent.example.com/callback"},
 	}), &agentMCPOutput{})
@@ -327,7 +327,7 @@ func (s *AgentToolsTestSuite) TestOnboardAgent_Delegated() {
 }
 
 func (s *AgentToolsTestSuite) TestOnboardAgent_DelegatedNeedsRedirectURIs() {
-	result := s.call("thunderid_onboard_agent", map[string]any{
+	result := s.call("onboard_agent", map[string]any{
 		"type": "assistant", "ouId": "ou-1", "mode": "delegated",
 	})
 
@@ -339,7 +339,7 @@ func (s *AgentToolsTestSuite) TestOnboardAgent_NoCredentials() {
 	received := s.captureCreate("")
 
 	var out agentMCPOutput
-	s.structured(s.call("thunderid_onboard_agent", map[string]any{
+	s.structured(s.call("onboard_agent", map[string]any{
 		"type": "assistant", "ouId": "ou-1", "mode": "none",
 	}), &out)
 
@@ -353,7 +353,7 @@ func (s *AgentToolsTestSuite) TestOnboardAgent_ServiceError() {
 		Return(nil, &tidcommon.ServiceError{
 			ErrorDescription: tidcommon.I18nMessage{DefaultValue: "Organization unit not found"}}).Once()
 
-	result := s.call("thunderid_onboard_agent", map[string]any{"type": "assistant", "ouId": "missing"})
+	result := s.call("onboard_agent", map[string]any{"type": "assistant", "ouId": "missing"})
 
 	s.Equal("failed to onboard agent: Organization unit not found", s.errorText(result))
 }
@@ -362,7 +362,7 @@ func (s *AgentToolsTestSuite) TestSetAgentMode_TurnsDelegatedOn() {
 	received := s.captureUpdate(storedAgent(providers.GrantTypeClientCredentials), "")
 
 	var out agentMCPOutput
-	s.structured(s.call("thunderid_set_agent_mode", map[string]any{
+	s.structured(s.call("set_agent_mode", map[string]any{
 		"id": toolsAgentID, "mode": "delegated", "redirectUris": []any{"https://agent.example.com/callback"},
 	}), &out)
 
@@ -380,7 +380,7 @@ func (s *AgentToolsTestSuite) TestSetAgentMode_DelegatedNeedsRedirectURIs() {
 	s.mockService.On("GetAgent", mock.Anything, toolsAgentID, false).
 		Return(storedAgent(providers.GrantTypeClientCredentials), (*tidcommon.ServiceError)(nil)).Once()
 
-	result := s.call("thunderid_set_agent_mode", map[string]any{"id": toolsAgentID, "mode": "delegated"})
+	result := s.call("set_agent_mode", map[string]any{"id": toolsAgentID, "mode": "delegated"})
 
 	s.Equal("failed to set agent mode: delegated mode needs at least one redirect URI", s.errorText(result))
 	s.mockService.AssertNotCalled(s.T(), "UpdateAgent", mock.Anything, mock.Anything, mock.Anything)
@@ -391,7 +391,7 @@ func (s *AgentToolsTestSuite) TestSetAgentMode_TurnsDelegatedOff() {
 		providers.GrantTypeAuthorizationCode, providers.GrantTypeRefreshToken, providers.GrantTypeTokenExchange), "")
 
 	var out agentMCPOutput
-	s.structured(s.call("thunderid_set_agent_mode", map[string]any{"id": toolsAgentID, "mode": "autonomous"}), &out)
+	s.structured(s.call("set_agent_mode", map[string]any{"id": toolsAgentID, "mode": "autonomous"}), &out)
 
 	s.False(received.Delegated)
 	s.assertKept(received)
@@ -406,7 +406,7 @@ func (s *AgentToolsTestSuite) TestSetAgentMode_GivesCredentialsToAgentWithout() 
 	received := s.captureUpdate(storedAgent(), "issued-secret")
 
 	var out agentMCPOutput
-	s.structured(s.call("thunderid_set_agent_mode", map[string]any{"id": toolsAgentID, "mode": "autonomous"}), &out)
+	s.structured(s.call("set_agent_mode", map[string]any{"id": toolsAgentID, "mode": "autonomous"}), &out)
 
 	config := s.oauthConfig(received)
 	s.Equal([]providers.GrantType{providers.GrantTypeClientCredentials}, config.GrantTypes)
@@ -425,7 +425,7 @@ func (s *AgentToolsTestSuite) TestRotateAgentSecret() {
 		providers.GrantTypeAuthorizationCode), "")
 
 	var out agentMCPOutput
-	s.structured(s.call("thunderid_rotate_agent_secret", map[string]any{"id": toolsAgentID}), &out)
+	s.structured(s.call("rotate_agent_secret", map[string]any{"id": toolsAgentID}), &out)
 
 	config := s.oauthConfig(received)
 	s.NotEmpty(config.ClientSecret)
@@ -447,7 +447,7 @@ func (s *AgentToolsTestSuite) TestRotateAgentSecret_Refused() {
 		want   string
 	}{
 		{"no OAuth client", storedAgent(), "failed to rotate agent secret: " +
-			"the agent has no OAuth client; use thunderid_set_agent_mode to give it one"},
+			"the agent has no OAuth client; use set_agent_mode to give it one"},
 		{"public client", publicClient,
 			"failed to rotate agent secret: the agent does not authenticate with a client secret"},
 	}
@@ -455,7 +455,7 @@ func (s *AgentToolsTestSuite) TestRotateAgentSecret_Refused() {
 		s.Run(tc.name, func() {
 			s.mockService.On("GetAgent", mock.Anything, toolsAgentID, false).
 				Return(tc.stored, (*tidcommon.ServiceError)(nil)).Once()
-			s.Equal(tc.want, s.errorText(s.call("thunderid_rotate_agent_secret", map[string]any{"id": toolsAgentID})))
+			s.Equal(tc.want, s.errorText(s.call("rotate_agent_secret", map[string]any{"id": toolsAgentID})))
 		})
 	}
 	s.mockService.AssertNotCalled(s.T(), "UpdateAgent", mock.Anything, mock.Anything, mock.Anything)
@@ -466,7 +466,7 @@ func (s *AgentToolsTestSuite) TestRotateAgentSecret_ReadError() {
 		Return(nil, &tidcommon.ServiceError{
 			ErrorDescription: tidcommon.I18nMessage{DefaultValue: "Agent not found"}}).Once()
 
-	result := s.call("thunderid_rotate_agent_secret", map[string]any{"id": "missing"})
+	result := s.call("rotate_agent_secret", map[string]any{"id": "missing"})
 
 	s.Equal("failed to rotate agent secret: Agent not found", s.errorText(result))
 }
@@ -475,7 +475,7 @@ func (s *AgentToolsTestSuite) TestTransferAgentOwnership() {
 	received := s.captureUpdate(storedAgent(providers.GrantTypeClientCredentials), "")
 
 	var out agentMCPOutput
-	s.structured(s.call("thunderid_transfer_agent_ownership", map[string]any{
+	s.structured(s.call("transfer_agent_ownership", map[string]any{
 		"id": toolsAgentID, "owner": "user-2"}), &out)
 
 	s.Equal("user-2", received.Owner)
@@ -491,7 +491,7 @@ func (s *AgentToolsTestSuite) TestTransferAgentOwnership_Errors() {
 		s.mockService.On("GetAgent", mock.Anything, toolsAgentID, false).
 			Return(storedAgent(), (*tidcommon.ServiceError)(nil)).Once()
 		s.Equal("failed to transfer agent ownership: owner is required", s.errorText(
-			s.call("thunderid_transfer_agent_ownership", map[string]any{"id": toolsAgentID, "owner": ""})))
+			s.call("transfer_agent_ownership", map[string]any{"id": toolsAgentID, "owner": ""})))
 	})
 	s.Run("update refused", func() {
 		s.mockService.On("GetAgent", mock.Anything, toolsAgentID, false).
@@ -500,7 +500,7 @@ func (s *AgentToolsTestSuite) TestTransferAgentOwnership_Errors() {
 			Return(nil, &tidcommon.ServiceError{
 				ErrorDescription: tidcommon.I18nMessage{DefaultValue: "Owner not found"}}).Once()
 		s.Equal("failed to transfer agent ownership: Owner not found", s.errorText(
-			s.call("thunderid_transfer_agent_ownership", map[string]any{"id": toolsAgentID, "owner": "nobody"})))
+			s.call("transfer_agent_ownership", map[string]any{"id": toolsAgentID, "owner": "nobody"})))
 	})
 }
 
@@ -508,7 +508,7 @@ func (s *AgentToolsTestSuite) TestOffboardAgent() {
 	s.mockService.On("DeleteAgent", mock.Anything, toolsAgentID).Return((*tidcommon.ServiceError)(nil)).Once()
 
 	var out agentOffboardMCPResponse
-	s.structured(s.call("thunderid_offboard_agent", map[string]any{"id": toolsAgentID}), &out)
+	s.structured(s.call("offboard_agent", map[string]any{"id": toolsAgentID}), &out)
 
 	s.Equal(agentOffboardMCPResponse{ID: toolsAgentID, Deleted: true}, out)
 }
@@ -517,7 +517,7 @@ func (s *AgentToolsTestSuite) TestOffboardAgent_ServiceError() {
 	s.mockService.On("DeleteAgent", mock.Anything, toolsAgentID).Return(&tidcommon.ServiceError{
 		ErrorDescription: tidcommon.I18nMessage{DefaultValue: "Declarative agents cannot be modified"}}).Once()
 
-	result := s.call("thunderid_offboard_agent", map[string]any{"id": toolsAgentID})
+	result := s.call("offboard_agent", map[string]any{"id": toolsAgentID})
 
 	s.Equal("failed to offboard agent: Declarative agents cannot be modified", s.errorText(result))
 }

@@ -36,6 +36,8 @@ import (
 	authnprovidermgr "github.com/thunder-id/thunderid/internal/authnprovider/manager"
 	"github.com/thunder-id/thunderid/internal/authnprovider/restprovider"
 	"github.com/thunder-id/thunderid/internal/authz"
+	authzdetailexec "github.com/thunder-id/thunderid/internal/authzdetail/exec"
+	authzdetailmgt "github.com/thunder-id/thunderid/internal/authzdetail/mgt"
 	"github.com/thunder-id/thunderid/internal/authzen"
 	"github.com/thunder-id/thunderid/internal/cert"
 	"github.com/thunder-id/thunderid/internal/cimd"
@@ -94,6 +96,7 @@ import (
 	declarativeresource "github.com/thunder-id/thunderid/internal/system/declarative_resource"
 	"github.com/thunder-id/thunderid/internal/system/export"
 	healthcheckservice "github.com/thunder-id/thunderid/internal/system/healthcheck/service"
+	httpservice "github.com/thunder-id/thunderid/internal/system/http"
 	i18nmgt "github.com/thunder-id/thunderid/internal/system/i18n/mgt"
 	"github.com/thunder-id/thunderid/internal/system/importer"
 	"github.com/thunder-id/thunderid/internal/system/jose"
@@ -207,7 +210,8 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	exporters = append(exporters, agentTypeExporter)
 
 	// Initialize entity service
-	entityService, err := entity.Initialize(cacheManager, hashService, entityTypeService, ouService)
+	entityService, err := entity.Initialize(cacheManager, hashService, entityTypeService, ouService,
+		sharingService)
 	fatalOnError(ctx, logger, err, "Failed to initialize EntityService")
 
 	// Initialize entity provider
@@ -215,7 +219,7 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 
 	// The notification services are built before governance, which sends the lock email through them.
 	notifSenderMgtSvc, notifOTPService, notifSenderSvc, notificationConfigHandler, err :=
-		notification.Initialize(jwtService, notificationconfig.FromServerRuntime())
+		notification.Initialize(jwtService, notificationconfig.FromServerRuntime(), ouService)
 	fatalOnError(ctx, logger, err, "Failed to initialize NotificationService")
 
 	notifTemplateSvc, notifTemplateRenderer, notifTemplateExporter, err :=
@@ -228,7 +232,7 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	err = governanceCfg.Validate()
 	fatalOnError(ctx, logger, err, "Invalid account_access configuration")
 
-	authZENPDPService, err := authzenpdp.Initialize(runtime.Config.AuthZENPDP, entityTypeService)
+	authZENPDPService, err := authzenpdp.Initialize(runtime.Config.AuthZENPDP, entityTypeService, ouService)
 	fatalOnError(ctx, logger, err, "Failed to initialize AuthZENPDPService")
 
 	resourceService, resourceExporter, err := resource.Initialize(mux, ouService, authZENPDPService, nil)
@@ -265,6 +269,13 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	// The base resourceService is still used for resource-management APIs and server-config validation.
 	resourceServerProvider := resource.NewDefaultAwareResourceServerProvider(resourceService, serverConfigService)
 
+	// Initialize authorization details type management and processing.
+	authzDetailMgtService, authzDetailExporter, err := authzdetailmgt.Initialize(mux, mcpServer, nil)
+	fatalOnError(ctx, logger, err, "Failed to initialize AuthorizationDetailMgtService")
+	exporters = append(exporters, authzDetailExporter)
+	authzDetailService := authzdetailexec.Initialize(authzDetailMgtService,
+		runtime.Config.OAuth.AuthorizationDetails.ProcessorTimeoutOrDefault())
+
 	// The security-headers middleware reads the deny-first CSP policy from the server-config csp section.
 	csp.InitializeConfigReader(serverConfigService)
 
@@ -295,7 +306,8 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	fatalOnError(ctx, logger, err, "Failed to initialize GroupService")
 	exporters = append(exporters, groupExporter)
 
-	httpConnectionService := httpconnection.Initialize()
+	httpConnectionService, err := httpconnection.Initialize(runtime.Config.HTTPConnection, ouService)
+	fatalOnError(ctx, logger, err, "Failed to initialize HTTPConnectionService")
 
 	// Initialize SCIM service.
 	scim.Initialize(
@@ -308,7 +320,7 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 
 	roleService, roleAssignmentService, ouRoleResolver, roleExporter, err := role.Initialize(
 		mux, entityService, groupService, ouService, resourceService, entityTypeService, ouAuthzService,
-	)
+		sharingService)
 	fatalOnError(ctx, logger, err, "Failed to initialize RoleService")
 	exporters = append(exporters, roleExporter)
 
@@ -330,13 +342,15 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	authZService := authz.Initialize(
 		roleService, resourceService, entityService, authZENPDPService)
 
-	idpService, err := idp.Initialize(cacheManager, entityTypeService, roleService, groupService, resourceService)
+	idpService, err := idp.Initialize(
+		cacheManager, entityTypeService, roleService, groupService, resourceService, ouService)
 	fatalOnError(ctx, logger, err, "Failed to initialize IDPService")
 
 	// Register the /connections API as a thin layer over the identity-provider and
 	// notification-sender services.
-	connectionExporter, err := connection.Initialize(
-		mux, mcpServer, idpService, notifSenderMgtSvc, resourceService, authZENPDPService, httpConnectionService, nil)
+	connectionExporter, ouDependencyProvider, httpConnectionWriter, err := connection.Initialize(
+		mux, mcpServer, idpService, notifSenderMgtSvc, resourceService, authZENPDPService, httpConnectionService,
+		nil, sharingService)
 	fatalOnError(ctx, logger, err, "Failed to initialize connection declarative resources")
 	exporters = append(exporters, connectionExporter)
 
@@ -423,36 +437,42 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	flowConfig.Session = sessionCfg
 	flowFactory, execRegistry, interceptorRegistry, graphBuilder := initializeFlowCoreAndExecutor(ctx, logger,
 		cacheManager, executor.ExecutorDependencies{
-			OUService:             ouProvider,
-			IDPService:            idpService,
-			NotifSenderSvc:        notifSenderSvc,
-			JWTService:            jwtService,
-			AuthAssertGen:         authAssertGen,
-			ConsentEnforcer:       consentEnforcer,
-			AuthnProvider:         authnProvider,
-			OTPService:            otpCoreService,
-			MagicLinkService:      magicLinkService,
-			AuthZService:          authZService,
-			EntityTypeService:     entityTypeService,
-			GroupService:          groupService,
-			RoleService:           roleService,
-			RoleAssignmentService: roleAssignmentService,
-			EntityProvider:        entityProvider,
-			UserMgtProvider:       userMgtProvider,
-			AttributeCacheSvc:     attributeCacheService,
-			TemplateRenderer:      notifTemplateRenderer,
-			OAuthSvc:              oauthAuthnService,
-			OIDCSvc:               oidcAuthnService,
-			GithubSvc:             githubAuthnService,
-			GoogleSvc:             googleAuthnService,
-			OpenID4VPVerifierSvc:  openid4vpSvc,
-			SessionService:        sessionService,
-			ResourceService:       resourceServerProvider,
-			UserService:           userService,
-			CriteriaRevoker:       revocationSvc,
-			ResourceMgtService:    resourceService,
-			IdentityGovernance:    governanceProvider,
-			ArtifactLifetime:      artifactLifetime,
+			OUService:              ouProvider,
+			IDPService:             idpService,
+			NotifSenderSvc:         notifSenderSvc,
+			JWTService:             jwtService,
+			AuthAssertGen:          authAssertGen,
+			ConsentEnforcer:        consentEnforcer,
+			AuthnProvider:          authnProvider,
+			OTPService:             otpCoreService,
+			MagicLinkService:       magicLinkService,
+			AuthZService:           authZService,
+			EntityTypeService:      entityTypeService,
+			GroupService:           groupService,
+			RoleService:            roleService,
+			RoleAssignmentService:  roleAssignmentService,
+			EntityProvider:         entityProvider,
+			UserMgtProvider:        userMgtProvider,
+			AttributeCacheSvc:      attributeCacheService,
+			TemplateRenderer:       notifTemplateRenderer,
+			OAuthSvc:               oauthAuthnService,
+			OIDCSvc:                oidcAuthnService,
+			GithubSvc:              githubAuthnService,
+			GoogleSvc:              googleAuthnService,
+			OpenID4VPVerifierSvc:   openid4vpSvc,
+			SessionService:         sessionService,
+			ResourceService:        resourceServerProvider,
+			UserService:            userService,
+			CriteriaRevoker:        revocationSvc,
+			ResourceMgtService:     resourceService,
+			HTTPConnectionProvider: httpConnectionService,
+			// A redirect would resend the connection's credential to another host. Each call is bounded
+			// by its connection's timeout, and private addresses are allowed since administrators set
+			// the endpoint.
+			ExtensionHTTPClient: httpservice.NewHTTPClientWithoutRedirects(0, false),
+			ObservabilitySvc:    observabilitySvc,
+			IdentityGovernance:  governanceProvider,
+			ArtifactLifetime:    artifactLifetime,
 		},
 		interceptor.InterceptorDependencies{},
 		flowConfig,
@@ -460,7 +480,8 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 
 	flowMgtService, flowMgtExporter, err := flowmgt.Initialize(
 		mux, mcpServer, cacheManager, flowFactory, execRegistry, interceptorRegistry, graphBuilder,
-		serverConfigService, ouService, notifTemplateSvc, flowConfigHandler)
+		serverConfigService, ouService, notifTemplateSvc, httpConnectionService, flowConfigHandler, idpService,
+		true)
 	fatalOnError(ctx, logger, err, "Failed to initialize FlowMgtService")
 
 	// Two-phase initialization: inject the flow resolver into the OU service.
@@ -483,9 +504,7 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	inboundClientService, err := inboundclient.Initialize(
 		cacheManager, certservice, entityProvider,
 		themeMgtService, layoutMgtService, flowMgtService, entityTypeService, runtimeCryptoSvc, jweService,
-		cimdService, sharingService, map[providers.EntityCategory]sharing.ResourceType{
-			providers.EntityCategoryApp: application.ApplicationSharingType,
-		})
+		cimdService, sharingService, entityService)
 	fatalOnError(ctx, logger, err, "Failed to initialize InboundClientService")
 
 	// Inject the consent service into the consent enforcer. It is wired here rather than at enforcer
@@ -513,23 +532,24 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 
 	// Wire the dependency registry into the consuming services (two-phase init to avoid cyclic
 	// imports). flowMgtService is both a consumer and a provider: it reports which flows reference an
-	// identity provider or notification sender.
+	// identity provider, notification sender or HTTP connection.
 	registerDependencyRegistry(dependencyConsumers{
-		theme:         themeMgtService,
-		layout:        layoutMgtService,
-		flow:          flowMgtService,
-		user:          userService,
-		idp:           idpService,
-		notifSender:   notifSenderMgtSvc,
-		application:   applicationService,
-		agent:         agentService,
-		group:         groupService,
-		ou:            ouService,
-		resource:      resourceService,
-		notifTemplate: notifTemplateSvc,
+		theme:          themeMgtService,
+		layout:         layoutMgtService,
+		flow:           flowMgtService,
+		user:           userService,
+		idp:            idpService,
+		notifSender:    notifSenderMgtSvc,
+		application:    applicationService,
+		agent:          agentService,
+		group:          groupService,
+		ou:             ouService,
+		resource:       resourceService,
+		notifTemplate:  notifTemplateSvc,
+		httpConnection: httpConnectionService,
 	}, applicationService, agentService, flowMgtService, roleAssignmentService, roleService,
 		groupService, ouService, ouUserResolver, ouGroupResolver, entityTypeService, resourceService,
-		sharingService, notifTemplateSvc)
+		sharingService, notifTemplateSvc, ouDependencyProvider)
 
 	// Initialize design resolve service for theme and layout resolution
 	designResolveService := resolve.Initialize(mux, themeMgtService, layoutMgtService, applicationService)
@@ -580,6 +600,10 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 		notifTemplateSvc,
 		authZENPDPService,
 		sharingService,
+		authzDetailMgtService,
+		httpConnectionWriter,
+		// Only the Control Plane serves projects, so a root organization unit is imported on its own.
+		nil,
 		// References in imported configuration are replaced with what this deployment's store holds. A
 		// secret is put only where an export of the resource keeps one, which its exporter names.
 		secretresolver.New(variablestore.Lookup(references)).
@@ -601,7 +625,8 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 		flowExecService, observabilitySvc, runtimeCryptoSvc, ouProvider, attributeCacheService, authZService,
 		resourceServerProvider, i18nService, idpService, dpopVerifier,
 		runtimeStoreProvider, transactioner, revocationEnforcer, revocationSvc,
-		sessionService, ssoTransport, flowMgtService, governanceProvider, oauthCfg)
+		sessionService, ssoTransport, flowMgtService, governanceProvider, authzDetailService, authzDetailMgtService,
+		oauthCfg)
 	fatalOnError(ctx, logger, err, "Failed to initialize OAuth services")
 	if dispatcher != nil {
 		err = terminationHook.Add(dispatcher)
@@ -641,18 +666,19 @@ func initAttestationProvider(ctx context.Context, logger *log.Logger,
 // dependencyConsumers groups the services that check the dependency registry before deleting their
 // own resources.
 type dependencyConsumers struct {
-	theme         thememgt.ThemeMgtServiceInterface
-	layout        layoutmgt.LayoutMgtServiceInterface
-	flow          flowmgt.FlowMgtServiceInterface
-	user          user.UserServiceInterface
-	idp           idp.IDPServiceInterface
-	notifSender   notification.NotificationSenderMgtSvcInterface
-	application   application.ApplicationServiceInterface
-	agent         agent.AgentServiceInterface
-	group         group.GroupServiceInterface
-	ou            ou.ConfigurableOUService
-	resource      resource.ResourceServiceInterface
-	notifTemplate notificationtemplate.NotificationTemplateServiceInterface
+	theme          thememgt.ThemeMgtServiceInterface
+	layout         layoutmgt.LayoutMgtServiceInterface
+	flow           flowmgt.FlowMgtServiceInterface
+	user           user.UserServiceInterface
+	idp            idp.IDPServiceInterface
+	notifSender    notification.NotificationSenderMgtSvcInterface
+	application    application.ApplicationServiceInterface
+	agent          agent.AgentServiceInterface
+	group          group.GroupServiceInterface
+	ou             ou.ConfigurableOUService
+	resource       resource.ResourceServiceInterface
+	notifTemplate  notificationtemplate.NotificationTemplateServiceInterface
+	httpConnection httpconnection.HTTPConnectionServiceInterface
 }
 
 // registerDependencyRegistry builds the dependency registry from the given providers and wires it
@@ -671,6 +697,7 @@ func registerDependencyRegistry(consumers dependencyConsumers, providers ...reso
 	consumers.ou.SetDependencyRegistry(registry)
 	consumers.resource.SetDependencyRegistry(registry)
 	consumers.notifTemplate.SetDependencyRegistry(registry)
+	consumers.httpConnection.SetDependencyRegistry(registry)
 }
 
 // unregisterServices unregisters all services that require cleanup during shutdown.

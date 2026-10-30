@@ -40,7 +40,7 @@ func registerMCPTools(server *mcp.Server, entityTypeService EntityTypeServiceInt
 	tools := &entityTypeTools{entityTypeService: entityTypeService}
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "thunderid_list_user_types",
+		Name:        "list_user_types",
 		Description: `List all user types.`,
 		Annotations: &mcp.ToolAnnotations{
 			Title:        "List User Types",
@@ -49,7 +49,7 @@ func registerMCPTools(server *mcp.Server, entityTypeService EntityTypeServiceInt
 	}, tools.listUserTypes)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "thunderid_list_agent_types",
+		Name: "list_agent_types",
 		Description: `List all agent types. Every agent belongs to one: its handle is the type an agent is ` +
 			`onboarded with, and its schema sets the agent's attributes.`,
 		Annotations: &mcp.ToolAnnotations{

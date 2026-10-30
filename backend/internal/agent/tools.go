@@ -107,7 +107,7 @@ type agentMCPOutput struct {
 //
 //nolint:lll
 type agentOnboardMCPInput struct {
-	Type         string         `json:"type" jsonschema:"Handle of the agent type. Use thunderid_list_agent_types to find it."`
+	Type         string         `json:"type" jsonschema:"Handle of the agent type. Use list_agent_types to find it."`
 	OUID         string         `json:"ouId,omitempty" jsonschema:"ID of the organization unit the agent belongs to. Give ouId or ouHandle."`
 	OUHandle     string         `json:"ouHandle,omitempty" jsonschema:"Handle of the organization unit the agent belongs to. Give ouId or ouHandle."`
 	Description  string         `json:"description,omitempty" jsonschema:"What the agent does"`
@@ -143,7 +143,7 @@ func registerMCPTools(server *mcp.Server, service AgentServiceInterface) {
 	tools := &agentTools{service: service}
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "thunderid_list_agents",
+		Name: "list_agents",
 		Description: `List agents: the machine identities of AI assistants, background workers and other ` +
 			`software. Returns each agent's ID, name, type, organization unit, OAuth client ID, owner and status.`,
 		Annotations: &mcp.ToolAnnotations{
@@ -153,7 +153,7 @@ func registerMCPTools(server *mcp.Server, service AgentServiceInterface) {
 	}, tools.listAgents)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "thunderid_get_agent",
+		Name: "get_agent",
 		Description: `Describe an agent: who owns it, whether it acts on its own or also on behalf of ` +
 			`signed-in users, how it authenticates (client ID, grant types, redirect URIs) and the roles and ` +
 			`groups it holds. The client secret is never returned.`,
@@ -164,7 +164,7 @@ func registerMCPTools(server *mcp.Server, service AgentServiceInterface) {
 	}, tools.getAgent)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "thunderid_onboard_agent",
+		Name: "onboard_agent",
 		Description: `Set up a new agent with its credentials.
 
 Choose the mode from what the agent has to do:
@@ -174,7 +174,7 @@ Choose the mode from what the agent has to do:
 - none: an identity only, with no credentials.
 
 The response carries the client secret. It is shown only once: hand it to whoever runs the agent, ` +
-			`and use thunderid_rotate_agent_secret if it is lost.`,
+			`and use rotate_agent_secret if it is lost.`,
 		InputSchema: getOnboardAgentSchema(),
 		Annotations: &mcp.ToolAnnotations{
 			Title:          "Onboard Agent",
@@ -183,7 +183,7 @@ The response carries the client secret. It is shown only once: hand it to whoeve
 	}, tools.onboardAgent)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "thunderid_set_agent_mode",
+		Name: "set_agent_mode",
 		Description: `Change whether an agent acts only on its own (autonomous) or also on behalf of ` +
 			`signed-in users (delegated). Other settings are kept.
 
@@ -198,7 +198,7 @@ The response carries the client secret. It is shown only once: hand it to whoeve
 	}, tools.setAgentMode)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "thunderid_rotate_agent_secret",
+		Name: "rotate_agent_secret",
 		Description: `Issue a new client secret for an agent, for example when the old one leaked or is ` +
 			`lost. The old secret stops working at once. The new one is returned only in this response. ` +
 			`Tokens already issued stay valid until they expire.`,
@@ -210,7 +210,7 @@ The response carries the client secret. It is shown only once: hand it to whoeve
 	}, tools.rotateAgentSecret)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "thunderid_transfer_agent_ownership",
+		Name: "transfer_agent_ownership",
 		Description: `Make another user accountable for an agent, for example when its owner leaves. ` +
 			`Only the owner changes.`,
 		Annotations: &mcp.ToolAnnotations{
@@ -220,7 +220,7 @@ The response carries the client secret. It is shown only once: hand it to whoeve
 	}, tools.transferAgentOwnership)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "thunderid_offboard_agent",
+		Name: "offboard_agent",
 		Description: `Permanently remove an agent that is no longer needed: its identity, credentials, ` +
 			`role assignments and group memberships. This cannot be undone. Confirm with the user first.`,
 		Annotations: &mcp.ToolAnnotations{
@@ -378,7 +378,7 @@ func (t *agentTools) rotateAgentSecret(
 	resp, err := t.changeAgent(ctx, input.ID, failure, func(req *model.UpdateAgentRequest) error {
 		oauthConfig := agentOAuthConfig(req.InboundAuthConfig)
 		if oauthConfig == nil {
-			return errors.New("the agent has no OAuth client; use thunderid_set_agent_mode to give it one")
+			return errors.New("the agent has no OAuth client; use set_agent_mode to give it one")
 		}
 		if !requiresClientSecret(oauthConfig) {
 			return errors.New("the agent does not authenticate with a client secret")

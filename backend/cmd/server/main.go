@@ -145,7 +145,8 @@ func main() {
 	// Start server in a goroutine
 	go func() {
 		startupDuration := time.Since(startupStartedAt)
-		logger.Info(ctx, "ThunderID Server started", log.String("startup_time", startupDuration.String()))
+		logger.Info(ctx, "ThunderID Server started",
+			log.String("mode", string(config.GetServerMode())), log.String("startup_time", startupDuration.String()))
 		if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
 			logger.Fatal(ctx, "Failed to serve requests", log.Error(err))
 		}
@@ -262,12 +263,13 @@ func createHTTPServer(ctx context.Context, logger *log.Logger, cfg *config.Confi
 	// Build the server address using hostname and port from the configurations.
 	serverAddr := fmt.Sprintf("%s:%d", cfg.Server.Hostname, cfg.Server.Port)
 
+	timeouts := cfg.Server.Timeouts
 	server := &http.Server{
 		Addr:              serverAddr,
 		Handler:           handler,
-		ReadHeaderTimeout: 10 * time.Second, // Mitigate Slowloris attacks
-		WriteTimeout:      10 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		ReadHeaderTimeout: timeouts.ReadHeader(), // Mitigate Slowloris attacks
+		WriteTimeout:      timeouts.Write(),
+		IdleTimeout:       timeouts.Idle(),
 		ErrorLog:          log.NewServerErrorLog(logger),
 	}
 

@@ -47,6 +47,9 @@ const (
 	FlowTypeSignOut FlowType = "SIGNOUT"
 	// FlowTypeAdministration represents an administrator-designed operational flow.
 	FlowTypeAdministration FlowType = "ADMINISTRATION"
+	// FlowTypeSystem represents a flow a service runs in process, such as revoking what a change
+	// invalidates. It is left out of ValidFlowTypes, so no API creates or starts one.
+	FlowTypeSystem FlowType = "SYSTEM"
 )
 
 // ValidFlowTypes is the set of supported flow types.
@@ -340,7 +343,7 @@ const (
 	// the reported expiry.
 	AccessHoldReasonFailedAttempts AccessHoldReason = "FAILED_ATTEMPTS"
 
-	// AccessHoldReasonSuspensionReleaseLock is the entity-wide lock left when a suspension is
+	// AccessHoldReasonSuspensionReleaseLock is the account-wide lock left when a suspension is
 	// cleared. It reports as LOCKED with no expiry and does not lift on its own.
 	AccessHoldReasonSuspensionReleaseLock AccessHoldReason = "SUSPENSION_RELEASE_LOCK"
 
@@ -531,6 +534,9 @@ const (
 	InputTypeDate = "DATE_INPUT"
 	// InputTypeBoolean represents a boolean (checkbox) input type.
 	InputTypeBoolean = "BOOLEAN_INPUT"
+	// InputTypeConnectionSelect is the type of a flow variable whose value is the identifier of a connection. It is
+	// not an input a prompt can ask for.
+	InputTypeConnectionSelect = "CONNECTION_SELECT"
 
 	// TODO: Add support for other sensitive input types:
 	// - Passkey credential fields (credentialId, clientDataJSON, authenticatorData, signature, userHandle)
