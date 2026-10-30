@@ -68,6 +68,7 @@ const (
 	ExecutorNameAgentTypeResolver            = executormeta.ExecutorNameAgentTypeResolver
 	ExecutorNameIdentityGovernance           = executormeta.ExecutorNameIdentityGovernance
 	ExecutorNamePreSuspend                   = executormeta.ExecutorNamePreSuspend
+	ExecutorNameExtension                    = executormeta.ExecutorNameExtension
 )
 
 // Executor mode constants
@@ -94,8 +95,8 @@ const (
 	ExecutorModeUnsuspend = executormeta.ExecutorModeUnsuspend
 )
 
-// defaultProvisioningCategory is the entity default category a provisioning node provisions into when its
-// mode property is not set.
+// defaultProvisioningCategory is the entity default category a provisioning node works on when no
+// type resolver put one in the runtime data.
 const defaultProvisioningCategory = entitytype.TypeCategoryUser
 
 // categoryUnscoped is the category an executor names when its work is not tied to one kind of
@@ -138,6 +139,7 @@ const (
 	governanceInputOperatorNote = "operatorNote"
 
 	ouIDKey        = "ouId"
+	ouHandleKey    = "ouHandle"
 	defaultOUIDKey = "defaultOUID"
 
 	// Input identifiers a flow definition declares for the entity type, one per category. A prompt
@@ -146,9 +148,12 @@ const (
 	agentTypeKey = "agentType"
 
 	// categoryTypeKey is the runtime slot carrying the resolved type handle. A run provisions one
-	// category, so the resolvers share a single slot. Readers pair the handle with the category they
-	// already hold from the node's mode property, which is what every type lookup needs.
+	// category, so the resolvers share a single slot. Readers pair the handle with the category from
+	// categoryNameKey.
 	categoryTypeKey = "categoryType"
+	// categoryNameKey is the runtime slot carrying the category the resolved type belongs to. The
+	// resolvers write it beside categoryTypeKey.
+	categoryNameKey = "categoryName"
 
 	// The agent record's own fields, collected by the flow rather than declared by the entity type
 	// schema. The agent service owns their validation.
@@ -187,9 +192,6 @@ const (
 	propertyKeyAssignRole            = "assignRole"
 	propertyKeySeedGroupsFromMapping = "seedGroupsFromMapping"
 	propertyKeySeedRolesFromMapping  = "seedRolesFromMapping"
-	// propertyKeyProvisioningMode names the entity category a provisioning node provisions into.
-	// The value is the category name; absent or empty means the default category.
-	propertyKeyProvisioningMode = "mode"
 	// propertyKeyDelegated sets whether a provisioned agent acts on behalf of a signed-in user when the
 	// flow does not collect the choice itself. A value the flow collects takes precedence. It applies
 	// to the agent category only.
@@ -211,7 +213,6 @@ const (
 	propertyKeyPresentationDefinitionID                = "presentation_definition_id"
 	propertyKeyCallbackType                            = "callbackType"
 	propertyKeyLoginHintAttribute                      = "loginHintAttribute"
-	propertyKeyMaxOTPAttempts                          = "maxAttempts"
 	propertyKeyOTPLength                               = "otpLength"
 	propertyKeyOTPUseNumericOnly                       = "otpUseNumericOnly"
 	propertyKeyOTPValidityPeriodSeconds                = "otpValidityPeriodSeconds"

@@ -565,7 +565,7 @@ func (as *authorizeService) initiateFlowAndStoreRequest(
 	// when neither is available. The resolved resource server id is threaded into the flow so the
 	// authorization executor scopes its permission evaluation to it.
 	targetRS, errResp := resourceindicators.ResolveAudienceBinding(
-		ctx, as.resourceService, oauthParams.Resources, oauthParams.PermissionScopes)
+		ctx, as.resourceService, oauthParams.Resources, oauthParams.PermissionScopes, false)
 	if errResp != nil {
 		return nil, &AuthorizationError{
 			Code:              errResp.Error,
@@ -714,7 +714,7 @@ func (as *authorizeService) tryCompleteWithSSOSession(
 	authID, executionID string,
 ) (string, *AuthorizationError) {
 	step, svcErr := as.flowExecService.Execute(ctx, app.ID, executionID,
-		string(providers.FlowTypeAuthentication), false, "", nil, "", "", "")
+		string(providers.FlowTypeAuthentication), false, "", nil, "", "", "", nil)
 	completed := svcErr == nil && step != nil && step.Status == providers.FlowStatusComplete &&
 		step.Assertion != ""
 	if !completed {

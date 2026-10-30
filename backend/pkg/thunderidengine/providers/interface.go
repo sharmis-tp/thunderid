@@ -6,6 +6,7 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/common"
 )
@@ -151,6 +152,9 @@ type FlowProvider interface {
 	GetFlowByHandle(ctx context.Context, handle string, flowType FlowType) (
 		*CompleteFlowDefinition, *common.ServiceError)
 	GetFlow(ctx context.Context, flowID string) (*CompleteFlowDefinition, *common.ServiceError)
+	// GetSystemFlow returns the system flow with the given handle. A provider that serves no system
+	// flows returns a not-found error.
+	GetSystemFlow(ctx context.Context, handle string) (*CompleteFlowDefinition, *common.ServiceError)
 }
 
 // ResourceServerProvider defines the interface for the resource provider.
@@ -196,6 +200,30 @@ type ConsentProvider interface {
 		decisions *ConsentDecisions, sessionToken string, validityPeriod int64,
 		runtimeMetadata map[string][]string) (
 		*Consent, *common.ServiceError)
+}
+
+// AuthorizationDetailProvider validates, prepares and processes RFC 9396 authorization details at runtime.
+type AuthorizationDetailProvider interface {
+	// ValidateAuthorizationDetails validates the authorization_details a client requested.
+	ValidateAuthorizationDetails(ctx context.Context, raw string) (json.RawMessage, *common.ServiceError)
+	// PrepareAuthorizationDetails stamps validated details with identifiers and type versions for a flow.
+	PrepareAuthorizationDetails(ctx context.Context, validated json.RawMessage) (
+		[]AuthorizationDetail, *common.ServiceError)
+	// ProcessAuthorizationDetails runs the type processors on the details and returns those admitted, each with
+	// Admitted set: consent refuses a detail of a type that declares a processor unless it is admitted. A
+	// detail is returned with any value the processor filled in or lowered. It fails with a client error when
+	// every detail is refused. client is the requesting application or agent, and clientID its OAuth client_id.
+	ProcessAuthorizationDetails(ctx context.Context, details []AuthorizationDetail, client EntityReference,
+		clientID string, subject EntityReference, resourceServer string) ([]AuthorizationDetail, *common.ServiceError)
+}
+
+// AuthorizationDetailTypeProvider provides the registered RFC 9396 authorization details types.
+type AuthorizationDetailTypeProvider interface {
+	// GetAuthorizationDetailTypeByValue returns the type registered under the given value, or nil if none.
+	GetAuthorizationDetailTypeByValue(ctx context.Context, value string) (
+		*AuthorizationDetailType, *common.ServiceError)
+	// ListAllAuthorizationDetailTypes returns every registered type.
+	ListAllAuthorizationDetailTypes(ctx context.Context) ([]AuthorizationDetailType, *common.ServiceError)
 }
 
 // CaptchaValidationProvider defines the contract for verifying captcha tokens.
@@ -342,7 +370,7 @@ type IdentityGovernanceProvider interface {
 		method AuthenticationMethod) (AccessDecision, *common.ServiceError)
 
 	// AdmitSignIn is EvaluateAccess at AccessPlaneSession for a completing sign-in. When it admits, it
-	// also clears a lapsed entity-wide failure record.
+	// also clears a lapsed account-wide failure record.
 	AdmitSignIn(ctx context.Context, entityID string) (AccessDecision, *common.ServiceError)
 
 	// RecordLogin stamps when the identity was last granted access. Callers do not fail the grant on
@@ -361,7 +389,7 @@ type IdentityGovernanceProvider interface {
 	// nothing. An identity already suspended passes.
 	ValidateSuspend(ctx context.Context, entityID, operatorNote string) *common.ServiceError
 
-	// Unsuspend releases the hold. A user is left with a non-expiring entity-wide lock, which a
+	// Unsuspend releases the hold. A user is left with a non-expiring account-wide lock, which a
 	// recovery or an unlock clears; an agent keeps any automatic lock still in force, and an
 	// application becomes active.
 	Unsuspend(ctx context.Context, entityID string) *common.ServiceError

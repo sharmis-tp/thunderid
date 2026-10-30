@@ -140,6 +140,17 @@ func (h *tokenExchangeGrantHandler) ValidateGrant(ctx context.Context, tokenRequ
 		}
 	}
 
+	// A client registered from a metadata document belongs to a third party, so token exchange serves it
+	// only for ID-JAG requests.
+	if oauthApp.ClientIDMetadataDocument &&
+		constants.TokenTypeIdentifier(tokenRequest.RequestedTokenType) != constants.TokenTypeIdentifierIDJAG {
+		return &model.ErrorResponse{
+			Error: constants.ErrorUnauthorizedClient,
+			ErrorDescription: "A client registered from a metadata document can use token exchange only " +
+				"to request ID-JAGs",
+		}
+	}
+
 	return nil
 }
 
@@ -291,7 +302,7 @@ func (h *tokenExchangeGrantHandler) HandleGrant(ctx context.Context, tokenReques
 	// and carries no resource is not bound to a resource server: its audience is the app's configured
 	// default audiences, falling back to the client_id.
 	targetRS, resErr := resourceindicators.ResolveAudienceBinding(
-		ctx, h.resourceService, tokenRequest.Resources, permissionScopes)
+		ctx, h.resourceService, tokenRequest.Resources, permissionScopes, false)
 	if resErr != nil {
 		return nil, resErr
 	}

@@ -91,20 +91,20 @@ func (s *RoleToolsTestSuite) TestRegisterMCPTools() {
 		tools[registered.Name] = registered
 	}
 	s.Len(tools, 7)
-	for _, name := range []string{"thunderid_list_roles", "thunderid_get_role"} {
+	for _, name := range []string{"list_roles", "get_role"} {
 		s.Require().Contains(tools, name)
 		s.True(tools[name].Annotations.ReadOnlyHint, name)
 	}
-	for _, name := range []string{"thunderid_revoke_role", "thunderid_change_role_permissions",
-		"thunderid_delete_role"} {
+	for _, name := range []string{"revoke_role", "change_role_permissions",
+		"delete_role"} {
 		s.Require().Contains(tools, name)
 		s.Require().NotNil(tools[name].Annotations.DestructiveHint, name)
 		s.True(*tools[name].Annotations.DestructiveHint, name)
 	}
-	s.Contains(tools, "thunderid_create_role")
-	s.Contains(tools, "thunderid_grant_role")
+	s.Contains(tools, "create_role")
+	s.Contains(tools, "grant_role")
 
-	grantSchema, err := json.Marshal(tools["thunderid_grant_role"].InputSchema)
+	grantSchema, err := json.Marshal(tools["grant_role"].InputSchema)
 	s.Require().NoError(err)
 	s.Contains(string(grantSchema), `"enum":["user","group","agent","app"]`)
 	s.NotContains(string(grantSchema), `"display"`)
@@ -117,7 +117,7 @@ func (s *RoleToolsTestSuite) TestListRoles() {
 	}, (*tidcommon.ServiceError)(nil)).Once()
 
 	var out roleListMCPResponse
-	s.structured(s.call("thunderid_list_roles", map[string]any{}), &out)
+	s.structured(s.call("list_roles", map[string]any{}), &out)
 
 	s.Equal(1, out.TotalResults)
 	s.Equal([]roleMCPItem{{ID: toolsRoleID, Name: "Support", OUID: "ou-1", OUHandle: "support", ReadOnly: true}},
@@ -127,7 +127,7 @@ func (s *RoleToolsTestSuite) TestListRoles() {
 func (s *RoleToolsTestSuite) TestListRoles_Error() {
 	s.mockService.On("GetRoleList", mock.Anything, 5, 10).Return(nil, serviceError("Invalid limit")).Once()
 
-	result := s.call("thunderid_list_roles", map[string]any{"limit": 5, "offset": 10})
+	result := s.call("list_roles", map[string]any{"limit": 5, "offset": 10})
 
 	s.Equal("failed to list roles: Invalid limit", s.errorText(result))
 }
@@ -142,7 +142,7 @@ func (s *RoleToolsTestSuite) TestGetRole() {
 		}}, (*tidcommon.ServiceError)(nil)).Once()
 
 	var out roleMCPOutput
-	s.structured(s.call("thunderid_get_role", map[string]any{"id": toolsRoleID}), &out)
+	s.structured(s.call("get_role", map[string]any{"id": toolsRoleID}), &out)
 
 	s.Equal("Support", out.Name)
 	s.Equal("support", out.OUHandle)
@@ -159,14 +159,14 @@ func (s *RoleToolsTestSuite) TestGetRole_Errors() {
 		s.mockService.On("GetRoleWithPermissions", mock.Anything, "missing").
 			Return(nil, serviceError("Role not found")).Once()
 		s.Equal("failed to get role: Role not found",
-			s.errorText(s.call("thunderid_get_role", map[string]any{"id": "missing"})))
+			s.errorText(s.call("get_role", map[string]any{"id": "missing"})))
 	})
 	s.Run("assignments", func() {
 		s.mockService.On("GetRoleWithPermissions", mock.Anything, toolsRoleID).
 			Return(storedRole(), (*tidcommon.ServiceError)(nil)).Once()
 		s.mockAssignmentService.On("GetRoleAssignments", mock.Anything, toolsRoleID, roleAssigneePageSize, 0, true).
 			Return(nil, &tidcommon.InternalServerError).Once()
-		s.Contains(s.errorText(s.call("thunderid_get_role", map[string]any{"id": toolsRoleID})),
+		s.Contains(s.errorText(s.call("get_role", map[string]any{"id": toolsRoleID})),
 			"failed to get role: ")
 	})
 }
@@ -184,7 +184,7 @@ func (s *RoleToolsTestSuite) TestCreateRole() {
 		}).Once()
 
 	var out roleMCPOutput
-	s.structured(s.call("thunderid_create_role", map[string]any{
+	s.structured(s.call("create_role", map[string]any{
 		"name": "  Auditor ", "ouId": "ou-1",
 		"permissions": []any{map[string]any{"resourceServerId": "rs-reports", "permissions": []any{"reports:read"}}},
 		"assignees":   []any{map[string]any{"id": "group-1", "type": "group"}},
@@ -205,10 +205,10 @@ func (s *RoleToolsTestSuite) TestCreateRole_Errors() {
 		s.mockService.On("CreateRole", mock.Anything, mock.Anything).
 			Return(nil, serviceError("Role name already exists")).Once()
 		s.Equal("failed to create role: Role name already exists", s.errorText(
-			s.call("thunderid_create_role", map[string]any{"name": "Support", "ouId": "ou-1"})))
+			s.call("create_role", map[string]any{"name": "Support", "ouId": "ou-1"})))
 	})
 	s.Run("unknown assignee type", func() {
-		result := s.call("thunderid_create_role", map[string]any{"name": "Support", "ouId": "ou-1",
+		result := s.call("create_role", map[string]any{"name": "Support", "ouId": "ou-1",
 			"assignees": []any{map[string]any{"id": "x", "type": "robot"}}})
 		s.True(result.IsError)
 	})
@@ -220,7 +220,7 @@ func (s *RoleToolsTestSuite) TestGrantRole() {
 		Return((*tidcommon.ServiceError)(nil)).Once()
 
 	var out roleAssigneesMCPResponse
-	s.structured(s.call("thunderid_grant_role", map[string]any{"id": toolsRoleID, "assignees": []any{
+	s.structured(s.call("grant_role", map[string]any{"id": toolsRoleID, "assignees": []any{
 		map[string]any{"id": "agent-1", "type": "agent"}, map[string]any{"id": "user-1", "type": "user"},
 	}}), &out)
 
@@ -232,7 +232,7 @@ func (s *RoleToolsTestSuite) TestGrantRole_Error() {
 	s.mockAssignmentService.On("AddAssignments", mock.Anything, toolsRoleID, mock.Anything).
 		Return(serviceError("Assignee not found")).Once()
 
-	result := s.call("thunderid_grant_role", map[string]any{"id": toolsRoleID,
+	result := s.call("grant_role", map[string]any{"id": toolsRoleID,
 		"assignees": []any{map[string]any{"id": "nobody", "type": "user"}}})
 
 	s.Equal("failed to grant role: Assignee not found", s.errorText(result))
@@ -243,7 +243,7 @@ func (s *RoleToolsTestSuite) TestRevokeRole() {
 		[]RoleAssignment{{ID: "group-1", Type: AssigneeTypeGroup}}).Return((*tidcommon.ServiceError)(nil)).Once()
 
 	var out roleAssigneesMCPResponse
-	s.structured(s.call("thunderid_revoke_role", map[string]any{"id": toolsRoleID,
+	s.structured(s.call("revoke_role", map[string]any{"id": toolsRoleID,
 		"assignees": []any{map[string]any{"id": "group-1", "type": "group"}}}), &out)
 
 	s.Equal([]roleMCPAssignee{{ID: "group-1", Type: "group"}}, out.Assignees)
@@ -253,7 +253,7 @@ func (s *RoleToolsTestSuite) TestRevokeRole_Error() {
 	s.mockAssignmentService.On("RemoveAssignments", mock.Anything, toolsRoleID, mock.Anything).
 		Return(serviceError("Cannot modify a declarative role")).Once()
 
-	result := s.call("thunderid_revoke_role", map[string]any{"id": toolsRoleID,
+	result := s.call("revoke_role", map[string]any{"id": toolsRoleID,
 		"assignees": []any{map[string]any{"id": "group-1", "type": "group"}}})
 
 	s.Equal("failed to revoke role: Cannot modify a declarative role", s.errorText(result))
@@ -272,7 +272,7 @@ func (s *RoleToolsTestSuite) TestChangeRolePermissions() {
 		}).Once()
 
 	var out roleMCPOutput
-	s.structured(s.call("thunderid_change_role_permissions", map[string]any{
+	s.structured(s.call("change_role_permissions", map[string]any{
 		"id": toolsRoleID,
 		"add": []any{
 			map[string]any{"resourceServerId": "rs-tickets", "permissions": []any{"tickets:refund", "tickets:read"}},
@@ -297,13 +297,13 @@ func (s *RoleToolsTestSuite) TestChangeRolePermissions() {
 func (s *RoleToolsTestSuite) TestChangeRolePermissions_Errors() {
 	s.Run("nothing to change", func() {
 		s.Equal("failed to change role permissions: give the permissions to add or remove",
-			s.errorText(s.call("thunderid_change_role_permissions", map[string]any{"id": toolsRoleID})))
+			s.errorText(s.call("change_role_permissions", map[string]any{"id": toolsRoleID})))
 	})
 	s.Run("read", func() {
 		s.mockService.On("GetRoleWithPermissions", mock.Anything, "missing").
 			Return(nil, serviceError("Role not found")).Once()
 		s.Equal("failed to change role permissions: Role not found", s.errorText(
-			s.call("thunderid_change_role_permissions", map[string]any{"id": "missing",
+			s.call("change_role_permissions", map[string]any{"id": "missing",
 				"remove": []any{map[string]any{"resourceServerId": "rs", "permissions": []any{"p"}}}})))
 	})
 	s.Run("update", func() {
@@ -312,7 +312,7 @@ func (s *RoleToolsTestSuite) TestChangeRolePermissions_Errors() {
 		s.mockService.On("UpdateRoleWithPermissions", mock.Anything, toolsRoleID, mock.Anything).
 			Return(nil, serviceError("Invalid permissions")).Once()
 		s.Equal("failed to change role permissions: Invalid permissions", s.errorText(
-			s.call("thunderid_change_role_permissions", map[string]any{"id": toolsRoleID,
+			s.call("change_role_permissions", map[string]any{"id": toolsRoleID,
 				"add": []any{map[string]any{"resourceServerId": "rs", "permissions": []any{"unknown"}}}})))
 	})
 }
@@ -321,7 +321,7 @@ func (s *RoleToolsTestSuite) TestDeleteRole() {
 	s.mockService.On("DeleteRole", mock.Anything, toolsRoleID).Return((*tidcommon.ServiceError)(nil)).Once()
 
 	var out roleDeleteMCPResponse
-	s.structured(s.call("thunderid_delete_role", map[string]any{"id": toolsRoleID}), &out)
+	s.structured(s.call("delete_role", map[string]any{"id": toolsRoleID}), &out)
 
 	s.Equal(roleDeleteMCPResponse{ID: toolsRoleID, Deleted: true}, out)
 }
@@ -330,7 +330,7 @@ func (s *RoleToolsTestSuite) TestDeleteRole_Error() {
 	s.mockService.On("DeleteRole", mock.Anything, toolsRoleID).
 		Return(serviceError("Cannot modify a declarative role")).Once()
 
-	result := s.call("thunderid_delete_role", map[string]any{"id": toolsRoleID})
+	result := s.call("delete_role", map[string]any{"id": toolsRoleID})
 
 	s.Equal("failed to delete role: Cannot modify a declarative role", s.errorText(result))
 }

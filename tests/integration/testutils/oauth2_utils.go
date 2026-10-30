@@ -9,6 +9,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -237,6 +238,21 @@ func SSOCookieNames(client *http.Client) ([]string, error) {
 		}
 	}
 	return names, nil
+}
+
+// SSOCookies returns the per-flow SSO cookies the session client's jar holds for the server, by name.
+func SSOCookies(client *http.Client) (map[string]string, error) {
+	serverURL, err := url.Parse(TestServerURL)
+	if err != nil {
+		return nil, err
+	}
+	cookies := map[string]string{}
+	for _, cookie := range client.Jar.Cookies(serverURL) {
+		if strings.HasPrefix(cookie.Name, SSOCookiePrefix) {
+			cookies[cookie.Name] = cookie.Value
+		}
+	}
+	return cookies, nil
 }
 
 // ExecuteAuthenticationFlow executes an authentication flow and returns the flow step.
@@ -1300,7 +1316,8 @@ type DPoPKey struct {
 }
 
 // GenerateDPoPKey generates a fresh key pair for the supplied DPoP signing
-// algorithm. Supported values: ES256, ES384, ES512, PS256, RS256, EdDSA.
+// algorithm. Supported values: ES256, ES384, ES512, PS256, RS256, EdDSA, ML-DSA-44,
+// ML-DSA-65, ML-DSA-87.
 func GenerateDPoPKey(alg string) (*DPoPKey, error) {
 	switch alg {
 	case "ES256":
@@ -1315,6 +1332,12 @@ func GenerateDPoPKey(alg string) (*DPoPKey, error) {
 		return generateRSAKey("RS256")
 	case "EdDSA":
 		return generateEdKey()
+	case "ML-DSA-44":
+		return generateMLDSAKey(mldsa.MLDSA44(), alg)
+	case "ML-DSA-65":
+		return generateMLDSAKey(mldsa.MLDSA65(), alg)
+	case "ML-DSA-87":
+		return generateMLDSAKey(mldsa.MLDSA87(), alg)
 	default:
 		return nil, fmt.Errorf("unsupported DPoP alg: %s", alg)
 	}
@@ -1377,6 +1400,23 @@ func generateEdKey() (*DPoPKey, error) {
 	return &DPoPKey{Alg: "EdDSA", Private: priv, JWK: jwk, JKT: jkt}, nil
 }
 
+func generateMLDSAKey(params mldsa.Parameters, alg string) (*DPoPKey, error) {
+	priv, err := mldsa.GenerateKey(params)
+	if err != nil {
+		return nil, err
+	}
+	jwk := map[string]any{
+		"kty": "AKP",
+		"alg": alg,
+		"pub": base64.RawURLEncoding.EncodeToString(priv.PublicKey().Bytes()),
+	}
+	jkt, err := computeJKT(jwk)
+	if err != nil {
+		return nil, err
+	}
+	return &DPoPKey{Alg: alg, Private: priv, JWK: jwk, JKT: jkt}, nil
+}
+
 // computeJKT computes the SHA-256 thumbprint of a JWK using only the
 // required public-key members in lexicographic order.
 func computeJKT(jwk map[string]any) (string, error) {
@@ -1396,6 +1436,10 @@ func computeJKT(jwk map[string]any) (string, error) {
 		crv, _ := jwk["crv"].(string)
 		x, _ := jwk["x"].(string)
 		canonical = fmt.Sprintf(`{"crv":%q,"kty":"OKP","x":%q}`, crv, x)
+	case "AKP":
+		alg, _ := jwk["alg"].(string)
+		pub, _ := jwk["pub"].(string)
+		canonical = fmt.Sprintf(`{"alg":%q,"kty":"AKP","pub":%q}`, alg, pub)
 	default:
 		return "", fmt.Errorf("unsupported kty for JKT: %s", kty)
 	}
@@ -1575,6 +1619,15 @@ func (k *DPoPKey) MakeUnsignedDPoPProof(htm, htu string) (string, error) {
 		base64.RawURLEncoding.EncodeToString(pb) + ".", nil
 }
 
+// JWKS returns an inline JWKS document holding the key's public JWK, tagged with kid and "sig" usage.
+func (k *DPoPKey) JWKS(kid string) string {
+	jwk := cloneJWK(k.JWK)
+	jwk["kid"] = kid
+	jwk["use"] = "sig"
+	jwksJSON, _ := json.Marshal(map[string]any{"keys": []map[string]any{jwk}})
+	return string(jwksJSON)
+}
+
 func signProof(priv crypto.Signer, alg, signingInput string) ([]byte, error) {
 	switch alg {
 	case "ES256", "ES384", "ES512":
@@ -1618,6 +1671,12 @@ func signProof(priv crypto.Signer, alg, signingInput string) ([]byte, error) {
 			return nil, fmt.Errorf("alg EdDSA requires ed25519.PrivateKey")
 		}
 		return ed25519.Sign(k, []byte(signingInput)), nil
+	case "ML-DSA-44", "ML-DSA-65", "ML-DSA-87":
+		k, ok := priv.(*mldsa.PrivateKey)
+		if !ok {
+			return nil, fmt.Errorf("alg %s requires *mldsa.PrivateKey", alg)
+		}
+		return k.Sign(nil, []byte(signingInput), &mldsa.Options{})
 	default:
 		return nil, fmt.Errorf("unsupported alg for signing: %s", alg)
 	}
@@ -1692,7 +1751,83 @@ func RandomJTI() string {
 }
 
 // SignJWT signs a JWS signing input using the given private key and algorithm.
-// Supported algorithms: ES256, ES384, ES512, PS256, RS256, EdDSA.
+// Supported algorithms: ES256, ES384, ES512, PS256, RS256, EdDSA, ML-DSA-44, ML-DSA-65, ML-DSA-87.
 func SignJWT(priv crypto.Signer, alg, signingInput string) ([]byte, error) {
 	return signProof(priv, alg, signingInput)
+}
+
+// ClientAssertionTypeJWTBearer is the client_assertion_type of a private_key_jwt client assertion.
+const ClientAssertionTypeJWTBearer = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+
+// ClientAssertionOptions configures the JWT built by CreateClientAssertion.
+type ClientAssertionOptions struct {
+	Sub       string
+	Aud       any // string or []string for testing array aud rejection
+	JTI       string
+	OmitJTI   bool
+	Exp       int64
+	OmitExp   bool
+	IAT       int64
+	Kid       string
+	Alg       string
+	Key       crypto.Signer
+	TamperSig bool
+}
+
+// CreateClientAssertion builds and signs a private_key_jwt client assertion JWT from opts. The issuer
+// is the subject, a missing exp is five minutes from now, and a missing jti is random.
+func CreateClientAssertion(opts ClientAssertionOptions) string {
+	header := map[string]any{
+		"alg": opts.Alg,
+		"kid": opts.Kid,
+		"typ": "JWT",
+	}
+
+	now := time.Now().Unix()
+	exp := opts.Exp
+	if exp == 0 {
+		exp = now + 300
+	}
+	iat := opts.IAT
+	if iat == 0 {
+		iat = now
+	}
+
+	payload := map[string]any{
+		"sub": opts.Sub,
+		"aud": opts.Aud,
+		"iss": opts.Sub,
+		"iat": iat,
+	}
+	if !opts.OmitExp {
+		payload["exp"] = exp
+	}
+	if !opts.OmitJTI {
+		jti := opts.JTI
+		if jti == "" {
+			jti = randomJTI()
+		}
+		payload["jti"] = jti
+	}
+
+	headerJSON, err := json.Marshal(header)
+	if err != nil {
+		panic(err)
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		panic(err)
+	}
+	signingInput := base64.RawURLEncoding.EncodeToString(headerJSON) + "." +
+		base64.RawURLEncoding.EncodeToString(payloadJSON)
+
+	sig, err := SignJWT(opts.Key, opts.Alg, signingInput)
+	if err != nil {
+		panic(err)
+	}
+	if opts.TamperSig && len(sig) > 0 {
+		sig[len(sig)-1] ^= 0x01
+	}
+
+	return signingInput + "." + base64.RawURLEncoding.EncodeToString(sig)
 }

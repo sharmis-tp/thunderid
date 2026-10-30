@@ -5,12 +5,12 @@ import {Stack} from '@wso2/oxygen-ui';
 import {useCallback, useMemo, type ReactNode} from 'react';
 import AccessChangeValidatorProperties from './execution-properties/AccessChangeValidatorProperties';
 import AgentTypeResolverProperties from './execution-properties/AgentTypeResolverProperties';
-import AttributeUniquenessValidatorProperties from './execution-properties/AttributeUniquenessValidatorProperties';
 import ConsentProperties from './execution-properties/ConsentProperties';
 import {EXECUTOR_TO_IDP_TYPE_MAP, EXECUTORS_WITH_FIXED_INPUTS} from './execution-properties/constants';
 import CriteriaRevocationProperties from './execution-properties/CriteriaRevocationProperties';
 import EmailProperties from './execution-properties/EmailProperties';
 import ExecutorInputsEditor from './execution-properties/ExecutorInputsEditor';
+import ExtensionProperties from './execution-properties/ExtensionProperties';
 import FederationProperties from './execution-properties/FederationProperties';
 import GroupExecutorProperties from './execution-properties/GroupExecutorProperties';
 import HttpRequestProperties from './execution-properties/HttpRequestProperties';
@@ -136,6 +136,9 @@ function ExecutionExtendedProperties({resource, onChange}: ExecutionExtendedProp
     case ExecutionTypes.HTTPRequestExecutor:
       executorSpecificProperties = <HttpRequestProperties resource={resource} onChange={onChange} />;
       break;
+    case ExecutionTypes.ExtensionExecutor:
+      executorSpecificProperties = <ExtensionProperties resource={resource} onChange={onChange} />;
+      break;
     case ExecutionTypes.MagicLinkExecutor:
       executorSpecificProperties = <MagicLinkProperties resource={resource} onChange={onChange} />;
       break;
@@ -149,8 +152,6 @@ function ExecutionExtendedProperties({resource, onChange}: ExecutionExtendedProp
       executorSpecificProperties = <SessionSignOutProperties resource={resource} onChange={onChange} />;
       break;
     case ExecutionTypes.AttributeUniquenessValidator:
-      executorSpecificProperties = <AttributeUniquenessValidatorProperties resource={resource} onChange={onChange} />;
-      break;
     case ExecutionTypes.CredentialSetter:
     case ExecutionTypes.PreSuspend:
     case ExecutionTypes.Session:

@@ -113,7 +113,7 @@ func registerMCPTools(server *mcp.Server, roleService RoleServiceInterface,
 	tools := &roleTools{roleService: roleService, assignmentService: assignmentService}
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "thunderid_list_roles",
+		Name:        "list_roles",
 		Description: `List roles with their organization units. Declarative roles are read-only.`,
 		Annotations: &mcp.ToolAnnotations{
 			Title:        "List Roles",
@@ -122,7 +122,7 @@ func registerMCPTools(server *mcp.Server, roleService RoleServiceInterface,
 	}, tools.listRoles)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "thunderid_get_role",
+		Name: "get_role",
 		Description: `Describe a role: the permissions it grants on each resource server and the users, ` +
 			`groups, agents and applications that hold it.`,
 		Annotations: &mcp.ToolAnnotations{
@@ -132,7 +132,7 @@ func registerMCPTools(server *mcp.Server, roleService RoleServiceInterface,
 	}, tools.getRole)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "thunderid_create_role",
+		Name: "create_role",
 		Description: `Create a role that grants a set of permissions, and optionally give it to its first ` +
 			`holders in the same step. Permissions are grouped by resource server and must exist on it.`,
 		InputSchema: getCreateRoleSchema(),
@@ -143,7 +143,7 @@ func registerMCPTools(server *mcp.Server, roleService RoleServiceInterface,
 	}, tools.createRole)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "thunderid_grant_role",
+		Name: "grant_role",
 		Description: `Give a role to users, groups, agents or applications. A group passes the role to ` +
 			`its members.`,
 		InputSchema: getRoleAssigneesSchema(),
@@ -154,7 +154,7 @@ func registerMCPTools(server *mcp.Server, roleService RoleServiceInterface,
 	}, tools.grantRole)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "thunderid_revoke_role",
+		Name: "revoke_role",
 		Description: `Take a role away from users, groups, agents or applications. Tokens already issued ` +
 			`keep the role's permissions until they expire.`,
 		InputSchema: getRoleAssigneesSchema(),
@@ -166,7 +166,7 @@ func registerMCPTools(server *mcp.Server, roleService RoleServiceInterface,
 	}, tools.revokeRole)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "thunderid_change_role_permissions",
+		Name: "change_role_permissions",
 		Description: `Add permissions to a role or remove them from it. Only the listed permissions change; ` +
 			`the role's other permissions, name and holders are kept. Removing permissions affects every ` +
 			`holder; tokens already issued keep them until they expire.`,
@@ -178,7 +178,7 @@ func registerMCPTools(server *mcp.Server, roleService RoleServiceInterface,
 	}, tools.changeRolePermissions)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "thunderid_delete_role",
+		Name: "delete_role",
 		Description: `Permanently delete a role and take it away from everyone who holds it. This cannot ` +
 			`be undone. Confirm with the user first.`,
 		Annotations: &mcp.ToolAnnotations{
